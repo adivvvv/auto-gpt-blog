@@ -1,0 +1,45 @@
+#!/usr/bin/env php
+<?php declare(strict_types=1);
+// bin/template-install
+// Fetch and install a unique template from the feed service.
+
+use App\FeedClient;
+use App\Util;
+
+require __DIR__ . '/../public/bootstrap.php';
+
+$cfg = Util::loadConfig();
+if (($cfg['feed_api_key'] ?? '') === '') {
+  fwrite(STDERR, "FEED_API_KEY is empty; set it in .env or settings.php\n");
+  exit(1);
+}
+
+// Defaults from settings.php (overridable by flags)
+$lang  = $cfg['template']['lang']       ?? ($cfg['lang'] ?? 'en');
+$seed  = $cfg['template']['seed']       ?? 'default-seed-01';
+$flags = $cfg['template']['styleFlags'] ?? ['clean','airy','modern'];
+
+// CLI flags
+foreach ($argv as $a) {
+  if (str_starts_with($a, '--lang='))  $lang  = substr($a, 7);
+  if (str_starts_with($a, '--seed='))  $seed  = substr($a, 7);
+  if (str_starts_with($a, '--flags=')) $flags = array_values(array_filter(explode(',', substr($a, 8))));
+}
+
+$client = new FeedClient($cfg['feed_base_url'], $cfg['feed_api_key']);
+$bundle = $client->templateBundle($lang, $seed, $flags);
+
+$written = 0;
+$root = realpath(__DIR__ . '/..');
+foreach (($bundle['files'] ?? []) as $f) {
+  $rel = $f['path'] ?? '';
+  $content = (string)($f['content'] ?? '');
+  if ($rel === '') continue;
+  $full = $root . $rel;
+  @mkdir(dirname($full), 0775, true);
+  file_put_contents($full, $content);
+  $written++;
+}
+
+printf("Installed template '%s' (seed=%s) — %d files written\n",
+  $bundle['name'] ?? 'Theme', $bundle['seed'] ?? $seed, $written);

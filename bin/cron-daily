@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# one article per day in default language from settings
+DIR="$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+php "$DIR/article-generate" --lang="${BLOG_LANG:-}" || exit 1

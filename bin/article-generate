@@ -1,0 +1,68 @@
+#!/usr/bin/env php
+<?php declare(strict_types=1);
+// bin/article-generate
+// Generate and save a new article via the feed service.
+
+use App\FeedClient;
+use App\Util;
+
+require __DIR__ . '/../public/bootstrap.php';
+
+$cfg = Util::loadConfig();
+if (($cfg['feed_api_key'] ?? '') === '') {
+  fwrite(STDERR, "FEED_API_KEY is empty; set it in .env or settings.php\n");
+  exit(1);
+}
+
+$lang = $cfg['lang'] ?? 'en';
+foreach ($argv as $a) {
+  if (str_starts_with($a, '--lang=')) $lang = substr($a, 7);
+}
+
+$client   = new FeedClient($cfg['feed_base_url'], $cfg['feed_api_key']);
+$envelope = $client->generateArticle($lang);
+
+// Normalize expected structure
+$article = $envelope['article'] ?? $envelope;
+$title   = (string)($article['title'] ?? 'Untitled');
+
+// prefer slugs coming from API if provided
+$slug    = (string)($envelope['slug'] ?? ($article['slug'] ?? Util::slugify($title)));
+$summary = (string)($envelope['summary'] ?? ($article['summary'] ?? ''));
+$tags    = $envelope['tags'] ?? ($article['tags'] ?? []);
+$refs    = $envelope['references'] ?? ($article['references'] ?? []);
+$body    = $envelope['body_markdown'] ?? ($article['body_markdown'] ?? '');
+
+$idx  = Util::loadIndex();
+$slug = Util::uniqueSlug($slug, $idx);
+
+$pmids = [];
+foreach ($refs as $r) {
+  if (!empty($r['pmid'])) $pmids[] = (string)$r['pmid'];
+}
+
+// Persist full post
+$post = [
+  'title'         => $title,
+  'slug'          => $slug,
+  'summary'       => $summary,
+  'tags'          => $tags,
+  'published_at'  => Util::nowIso(),
+  'body_markdown' => $body,
+  'references'    => $refs,
+  'pmids'         => $pmids,
+];
+Util::savePost($slug, $post);
+
+// Update index
+$idx['posts'] = $idx['posts'] ?? [];
+array_unshift($idx['posts'], [
+  'title'        => $title,
+  'slug'         => $slug,
+  'summary'      => $summary,
+  'tags'         => $tags,
+  'published_at' => $post['published_at'],
+]);
+Util::saveIndex($idx);
+
+printf("Saved post: %s (%s)\n", $title, $slug);
