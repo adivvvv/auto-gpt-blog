@@ -85,7 +85,11 @@ $transliterate = function(string $s, string $lang) use ($shouldTransliterate): s
 };
 $slugifyAscii = function(string $s, string $lang) use ($transliterate): string {
     $s = $transliterate($s, $lang);
-    $s = mb_strtolower($s, 'UTF-8');
+    if (function_exists('mb_strtolower')) {
+        $s = mb_strtolower($s, 'UTF-8');
+    } else {
+        $s = strtolower($s);
+    }
     $s = preg_replace('/[^a-z0-9]+/', '-', $s) ?? '';
     $s = trim($s, '-');
     $s = preg_replace('/-+/', '-', $s) ?? '';
@@ -258,3 +262,23 @@ $atomicWrite($indexFile, json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_
 $ensurePerms($indexFile, false, true); // posts.json -> 0775
 
 printf("Saved post: %s (%s)\n", $post['title'], $post['slug']);
+
+// --- After successful article save: rebuild feeds and ping services ---
+$phpBin = PHP_BINARY ?: 'php';
+$run = function(string $scriptRel) use ($phpBin, $base): int {
+    $script = $base . '/bin/' . $scriptRel;
+    $cmd = escapeshellarg($phpBin) . ' ' . escapeshellarg($script);
+    fwrite(STDERR, "[article-generate] running: $scriptRel\n");
+    $exit = 0;
+    system($cmd, $exit);
+    fwrite(STDERR, "[article-generate] $scriptRel exited with code $exit\n");
+    return (int)$exit;
+};
+
+// Rebuild feeds (non-fatal if it fails, but we log the code)
+$run('feed-rebuild');
+
+// Ping services (also non-fatal)
+$run('ping-services');
+
+exit(0);

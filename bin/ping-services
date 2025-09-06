@@ -1,7 +1,7 @@
 #!/usr/bin/env php
 <?php declare(strict_types=1);
 // bin/ping-services
-// Minimal XML-RPC pinger (Ping-O-Matic). No Composer; no autoload.
+// Minimal XML-RPC pinger (Ping-O-Matic). No Composer; no autoload. 
 
 function env_read(string $path): array {
     if (is_file($path)) {
