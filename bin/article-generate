@@ -25,7 +25,7 @@ const MAX_RETRIES     = 5;
 $cfg   = Util::loadConfig();
 $lang  = (string)($cfg['lang'] ?? 'en');
 $base  = realpath(__DIR__ . '/..') ?: dirname(__DIR__);
-$postsDir = $base . '/data/posts';
+$postsDir  = $base . '/data/posts';
 $indexFile = $base . '/data/posts.json';
 @mkdir($postsDir, 02775, true);
 $ensurePerms(dirname($postsDir), true);
@@ -36,6 +36,60 @@ $ensurePerms(dirname($indexFile), true);
 $strlen = function(string $s): int {
     if (function_exists('mb_strlen')) return (int)mb_strlen($s, 'UTF-8');
     return strlen($s); // bytes, but still a safe fallback
+};
+
+/**
+ * Transliterate to ASCII for slugs (languages: en,de,fr,it,es,sv,fi,nl,pl,cs).
+ * Then canonical slugify -> "a-z0-9-" only, collapsed, trimmed, lowercase.
+ */
+$shouldTransliterate = function(string $lang): bool {
+    return in_array($lang, ['en','de','fr','it','es','sv','fi','nl','pl','cs'], true);
+};
+$transliterate = function(string $s, string $lang) use ($shouldTransliterate): string {
+    if ($s === '' || !$shouldTransliterate($lang)) return $s;
+
+    // Common Latin diacritics across those languages
+    $map = [
+        // Polish
+        'ą'=>'a','ć'=>'c','ę'=>'e','ł'=>'l','ń'=>'n','ó'=>'o','ś'=>'s','ź'=>'z','ż'=>'z',
+        'Ą'=>'A','Ć'=>'C','Ę'=>'E','Ł'=>'L','Ń'=>'N','Ó'=>'O','Ś'=>'S','Ź'=>'Z','Ż'=>'Z',
+        // German
+        'ä'=>'a','ö'=>'o','ü'=>'u','ß'=>'ss','Ä'=>'A','Ö'=>'O','Ü'=>'U',
+        // French
+        'à'=>'a','â'=>'a','ä'=>'a','ç'=>'c','é'=>'e','è'=>'e','ê'=>'e','ë'=>'e',
+        'î'=>'i','ï'=>'i','ô'=>'o','ö'=>'o','ù'=>'u','û'=>'u','ü'=>'u','ÿ'=>'y',
+        'À'=>'A','Â'=>'A','Ä'=>'A','Ç'=>'C','É'=>'E','È'=>'E','Ê'=>'E','Ë'=>'E',
+        'Î'=>'I','Ï'=>'I','Ô'=>'O','Ö'=>'O','Ù'=>'U','Û'=>'U','Ü'=>'U','Ÿ'=>'Y',
+        'œ'=>'oe','Œ'=>'OE','æ'=>'ae','Æ'=>'AE',
+        // Spanish
+        'á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u','ñ'=>'n','ü'=>'u',
+        'Á'=>'A','É'=>'E','Í'=>'I','Ó'=>'O','Ú'=>'U','Ñ'=>'N','Ü'=>'U',
+        // Swedish / Finnish
+        'å'=>'a','Å'=>'A',
+        // Czech
+        'á'=>'a','č'=>'c','ď'=>'d','é'=>'e','ě'=>'e','í'=>'i','ň'=>'n','ó'=>'o',
+        'ř'=>'r','š'=>'s','ť'=>'t','ú'=>'u','ů'=>'u','ý'=>'y','ž'=>'z',
+        'Á'=>'A','Č'=>'C','Ď'=>'D','É'=>'E','Ě'=>'E','Í'=>'I','Ň'=>'N','Ó'=>'O',
+        'Ř'=>'R','Š'=>'S','Ť'=>'T','Ú'=>'U','Ů'=>'U','Ý'=>'Y','Ž'=>'Z',
+        // Misc common
+        'ø'=>'o','Ø'=>'O','đ'=>'d','Đ'=>'D','ħ'=>'h','Ħ'=>'H'
+    ];
+    $s = strtr($s, $map);
+
+    // Best-effort final pass if iconv available
+    if (function_exists('iconv')) {
+        $t = @iconv('UTF-8', 'ASCII//TRANSLIT//IGNORE', $s);
+        if (is_string($t) && $t !== '') $s = $t;
+    }
+    return $s;
+};
+$slugifyAscii = function(string $s, string $lang) use ($transliterate): string {
+    $s = $transliterate($s, $lang);
+    $s = mb_strtolower($s, 'UTF-8');
+    $s = preg_replace('/[^a-z0-9]+/', '-', $s) ?? '';
+    $s = trim($s, '-');
+    $s = preg_replace('/-+/', '-', $s) ?? '';
+    return $s;
 };
 
 /** Build post array from raw API response. */
@@ -158,7 +212,6 @@ while ($attempt < MAX_RETRIES) {
     } else {
         $bodyLen = $strlen(trim($candidate['body_markdown'] ?: strip_tags($candidate['body'] ?? '')));
         fwrite(STDERR, "[article-generate] invalid output (body chars={$bodyLen}). Retrying…\n");
-        // small jitter helps when the backend streams from a pool
         usleep(random_int(150000, 450000));
     }
 }
@@ -168,8 +221,15 @@ if (!$post) {
     exit(1);
 }
 
-// Finalize slug (ensure unique), then write post JSON atomically
-$post['slug'] = $uniqueSlug(Util::slugify($post['slug'] ?: $post['title']));
+// --- FINALIZE ASCII-ONLY SLUG, then save atomically ---
+$rawForSlug   = $post['slug'] !== '' ? $post['slug'] : $post['title'];
+$asciiSlug    = $slugifyAscii($rawForSlug, $lang);
+if ($asciiSlug === '') {
+    // Fallback to Util::slugify if our translit produced empty (extremely unlikely)
+    $asciiSlug = Util::slugify($rawForSlug) ?: 'post';
+}
+$post['slug'] = $uniqueSlug($asciiSlug);
+
 $json = json_encode($post, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 
 $path = $postsDir . '/' . $post['slug'] . '.json';
