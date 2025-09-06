@@ -4,19 +4,22 @@
 return [
   // Site chrome
   'site_name' => 'My Research Blog',
+  // Uses BASE_URL from .env installed by autoinstall; no trailing slash
   'base_url'  => rtrim(getenv('BASE_URL') ?: '/', '/'),
   'lang'      => 'en',
 
-  // Commerce CTA
+  // Commerce CTA (configurable per site)
   'shop_url'  => 'https://camelway.eu/',
+  'cta_title' => 'Premium Camel Milk Powder',
+  'cta_copy'  => 'Hypoallergenic, lactoferrin-rich nutrition - loved across Europe.',
   'cta_label' => 'Shop Now',
 
   // Rendering / pagination
   'posts_per_page' => 20,
 
   // Hero section
-  'hero_title'      => 'Buy Camel Milk',
-  'hero_subtitle'   => 'Buy camel milk powder products directly from most trusted source in Europe.',
+  'hero_title'    => 'Buy Camel Milk',
+  'hero_subtitle' => 'Buy camel milk powder products directly from most trusted source in Europe.',
 
   // Feed API (gpt-simple-generator) — you can also override via .env
   'feed_base_url' => rtrim(getenv('FEED_BASE_URL') ?: 'https://myendpoint.com', '/'),
@@ -31,12 +34,11 @@ return [
 
   // Footer links
   'footer_links' => [
-    ['label'=>'About',   'href'=>'/about'],
-    ['label'=>'Contact', 'href'=>'/contact'],
-    ['label'=>'Privacy', 'href'=>'/privacy'],
+    ['label'=>'RSS Feed',   'href'=>'/rss.xml'],
+    ['label'=>'ATOM Feed', 'href'=>'/atom.xml'],
   ],
 
   // Optional: date formatting & timezone for lists
-    'timezone'        => 'UTC',
-    'date_format'     => 'Y-m-d',
+  'timezone'    => 'UTC',
+  'date_format' => 'Y-m-d',
 ];
