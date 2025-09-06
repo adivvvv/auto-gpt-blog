@@ -1,48 +1,85 @@
 #!/usr/bin/env php
 <?php declare(strict_types=1);
+// bin/template-install
+// Fetch and install a unique template bundle from the feed service.
 
-use App\FeedClient;
-use App\Util;
+error_reporting(E_ALL);
+ini_set('display_errors', 'stderr');
 
-require __DIR__ . '/../public/bootstrap.php';
+$opts = getopt('', ['lang:', 'seed::', 'flags::']);
+$lang  = (string)($opts['lang']  ?? 'en');
+$seed  = isset($opts['seed'])  ? (string)$opts['seed']  : null;
+$flags = isset($opts['flags']) ? array_values(array_filter(array_map('trim', explode(',', (string)$opts['flags'])))) : [];
 
-$cfg = Util::loadConfig();
-if (($cfg['feed_api_key'] ?? '') === '') {
-  fwrite(STDERR, "FEED_API_KEY is empty; set it in .env or settings.php\n");
-  exit(1);
+$env = parse_ini_file(__DIR__ . '/../.env', false, INI_SCANNER_TYPED) ?: [];
+$FEED = rtrim((string)($env['FEED_BASE_URL'] ?? ''), '/');
+$KEY  = (string)($env['FEED_API_KEY'] ?? '');
+
+if ($FEED === '' || $KEY === '') {
+    fwrite(STDERR, "FEED_BASE_URL or FEED_API_KEY missing in .env\n");
+    exit(2);
 }
 
-// Defaults (can be overridden)
-$lang  = $cfg['template']['lang']       ?? ($cfg['lang'] ?? 'en');
-$seed  = $cfg['template']['seed']       ?? '';   // ← empty means “randomize”
-$flags = $cfg['template']['styleFlags'] ?? ['clean','airy','modern'];
-
-// CLI overrides
-foreach ($argv as $a) {
-  if (str_starts_with($a, '--lang='))  $lang  = substr($a, 7);
-  if (str_starts_with($a, '--seed='))  $seed  = substr($a, 7);
-  if (str_starts_with($a, '--flags=')) $flags = array_values(array_filter(explode(',', substr($a, 8))));
+$payload = ['lang' => $lang];
+// If seed is not provided, actively request randomization
+if ($seed !== null && $seed !== '') {
+    $payload['seed'] = $seed;
+} else {
+    $payload['randomize'] = true;
+}
+// Only send flags when user passes them (broaden the candidate pool otherwise)
+if (!empty($flags)) {
+    $payload['styleFlags'] = $flags;
 }
 
-// Randomize seed if not provided
-if ($seed === '' || $seed === 'default-seed-01') {
-  $seed = 'seed-' . bin2hex(random_bytes(5));
+$url = $FEED . '/template_bundle?_=' . rawurlencode((string)microtime(true));
+
+$ch = curl_init($url);
+curl_setopt_array($ch, [
+    CURLOPT_POST            => true,
+    CURLOPT_RETURNTRANSFER  => true,
+    CURLOPT_HTTPHEADER      => [
+        'Authorization: Bearer ' . $KEY,
+        'Content-Type: application/json',
+        'Cache-Control: no-cache',
+    ],
+    CURLOPT_POSTFIELDS      => json_encode($payload, JSON_UNESCAPED_UNICODE),
+    CURLOPT_TIMEOUT         => 120,
+    CURLOPT_CONNECTTIMEOUT  => 10,
+]);
+
+$raw = curl_exec($ch);
+if ($raw === false) {
+    fwrite(STDERR, "HTTP error: " . curl_error($ch) . "\n");
+    exit(3);
+}
+$code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+curl_close($ch);
+
+$data = json_decode((string)$raw, true);
+if ($code !== 200 || !is_array($data) || empty($data['ok']) || empty($data['bundle']['files'])) {
+    fwrite(STDERR, "Feed error ($code): " . substr($raw ?? '', 0, 400) . "\n");
+    exit(4);
 }
 
-$client = new FeedClient($cfg['feed_base_url'], $cfg['feed_api_key']);
-$bundle = $client->templateBundle($lang, $seed, $flags);
+$bundle = $data['bundle'];
+$name   = (string)($bundle['name'] ?? 'Unnamed Theme');
+$seedR  = (string)($bundle['seed'] ?? ($data['plan']['seed'] ?? 'n/a'));
 
+$root = realpath(__DIR__ . '/..') ?: dirname(__DIR__);
 $written = 0;
-$root = realpath(__DIR__ . '/..');
-foreach (($bundle['files'] ?? []) as $f) {
-  $rel = $f['path'] ?? '';
-  $content = (string)($f['content'] ?? '');
-  if ($rel === '') continue;
-  $full = $root . $rel;
-  @mkdir(dirname($full), 0775, true);
-  file_put_contents($full, $content);
-  $written++;
+foreach ($bundle['files'] as $f) {
+    $path = $root . $f['path'];
+    $dir  = dirname($path);
+    if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+        fwrite(STDERR, "Cannot create dir: $dir\n");
+        exit(5);
+    }
+    if (file_put_contents($path, (string)$f['content']) === false) {
+        fwrite(STDERR, "Cannot write file: $path\n");
+        exit(6);
+    }
+    $written++;
 }
 
-printf("Installed template '%s' (seed=%s) — %d files written\n",
-  $bundle['name'] ?? 'Theme', $bundle['seed'] ?? $seed, $written);
+echo "Installed template '{$name}' (seed={$seedR}) — {$written} files written\n";
