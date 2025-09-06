@@ -6,10 +6,15 @@
 error_reporting(E_ALL);
 ini_set('display_errors', 'stderr');
 
-$opts = getopt('', ['lang:', 'seed::', 'flags::']);
-$lang  = (string)($opts['lang']  ?? 'en');
-$seed  = isset($opts['seed'])  ? (string)$opts['seed']  : null;
+$opts = getopt('', ['seed::', 'flags::']);
+$lang = 'en';
+$seed = isset($opts['seed'])  ? (string)$opts['seed']  : null;
 $flags = isset($opts['flags']) ? array_values(array_filter(array_map('trim', explode(',', (string)$opts['flags'])))) : [];
+
+// Read language from app config (settings.php) instead of CLI
+require __DIR__ . '/../public/bootstrap.php';
+$cfg = \App\Util::loadConfig();
+$lang = (string)($cfg['lang'] ?? 'en');
 
 $env = parse_ini_file(__DIR__ . '/../.env', false, INI_SCANNER_TYPED) ?: [];
 $FEED = rtrim((string)($env['FEED_BASE_URL'] ?? ''), '/');
