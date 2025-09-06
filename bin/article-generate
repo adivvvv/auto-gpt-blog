@@ -1,79 +1,183 @@
 #!/usr/bin/env php
 <?php declare(strict_types=1);
 // bin/article-generate
-// Generate and save a new article via the feed service.
-
+// robust generator with validation + retries for a single article from the feed service.
 use App\FeedClient;
 use App\Util;
 
 require __DIR__ . '/../public/bootstrap.php';
 
-$cfg = Util::loadConfig();
-$lang = $cfg['lang'] ?? 'en';
+const MIN_BODY_CHARS = 200;
+const MAX_RETRIES     = 5;
 
-$client = new App\FeedClient($cfg['feed_base_url'], $cfg['feed_api_key']);
-$resp   = $client->generateArticle($lang);
+$cfg   = Util::loadConfig();
+$lang  = (string)($cfg['lang'] ?? 'en');
+$base  = realpath(__DIR__ . '/..') ?: dirname(__DIR__);
+$postsDir = $base . '/data/posts';
+$indexFile = $base . '/data/posts.json';
+@mkdir($postsDir, 0775, true);
 
-// Pull top-level fields
-$title   = (string)($resp['title'] ?? $resp['article']['title'] ?? 'Untitled');
-$slug    = (string)($resp['slug']  ?? Util::slugify($title));
-$summary = (string)($resp['summary'] ?? '');
-$tags    = array_values(array_filter((array)($resp['tags'] ?? [])));
-$refs    = (array)($resp['references'] ?? []);
-$faqs    = (array)($resp['article']['faqs'] ?? $resp['faqs'] ?? []);
+/** Character length (Unicode aware if mbstring present). */
+$strlen = function(string $s): int {
+    if (function_exists('mb_strlen')) return (int)mb_strlen($s, 'UTF-8');
+    return strlen($s); // bytes, but still a safe fallback
+};
 
-// Rebuild body_markdown from article.content[].paragraph
-$paragraphs = [];
-foreach ((array)($resp['article']['content'] ?? []) as $block) {
-  $p = (string)($block['paragraph'] ?? '');
-  if ($p !== '') $paragraphs[] = $p;
+/** Build post array from raw API response. */
+$buildPost = function(array $resp) use ($strlen): array {
+    $title   = (string)($resp['title'] ?? $resp['article']['title'] ?? '');
+    $slugIn  = (string)($resp['slug']  ?? '');
+    $slug    = $slugIn !== '' ? $slugIn : ($title !== '' ? Util::slugify($title) : '');
+    $summary = (string)($resp['summary'] ?? '');
+    $tags    = array_values(array_filter((array)($resp['tags'] ?? [])));
+    $refs    = (array)($resp['references'] ?? []);
+    $faqs    = (array)($resp['article']['faqs'] ?? $resp['faqs'] ?? []);
+
+    // Derive paragraphs from the structured 'article' shape if present.
+    $paragraphs = [];
+    foreach ((array)($resp['article']['content'] ?? []) as $block) {
+        $p = (string)($block['paragraph'] ?? '');
+        if ($p !== '') $paragraphs[] = $p;
+    }
+
+    // Fallbacks if the provider already includes body fields
+    $body_md = trim(implode("\n\n", $paragraphs));
+    if ($body_md === '') {
+        $body_md = trim((string)($resp['body_markdown'] ?? ''));
+        if ($body_md === '' && !empty($resp['body'])) {
+            // Strip tags for a markdown-ish fallback length check later
+            $body_md = trim(strip_tags((string)$resp['body']));
+        }
+    }
+
+    // HTML from paragraphs (preferred) else use provided HTML
+    $esc = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+    $body_html = '';
+    if (!empty($paragraphs)) {
+        $paras_html = array_map(fn($p) => '<p>'.$esc($p).'</p>', $paragraphs);
+        $body_html  = implode("\n", $paras_html);
+    } elseif (!empty($resp['body'])) {
+        $body_html = (string)$resp['body'];
+    }
+
+    // PMIDs for references section
+    $pmids = [];
+    foreach ($refs as $r) {
+        $pm = (string)($r['pmid'] ?? '');
+        if ($pm !== '') $pmids[] = $pm;
+    }
+
+    return [
+        'title'         => $title,
+        'slug'          => $slug,
+        'summary'       => $summary,
+        'tags'          => $tags,
+        'published_at'  => date('Y-m-d'),
+        'body_markdown' => $body_md,
+        'body'          => $body_html,
+        'faqs'          => $faqs,
+        'references'    => $refs,
+        'pmids'         => $pmids,
+    ];
+};
+
+/** Validate required fields. */
+$isValid = function(array $post) use ($strlen): bool {
+    if ($post['title'] === '' || $post['slug'] === '') return false;
+    // body can be either markdown or html; check combined minimum length
+    $len = $strlen(trim($post['body_markdown'] ?? ''));
+    if ($len < MIN_BODY_CHARS) {
+        $len = $strlen(trim(strip_tags((string)($post['body'] ?? ''))));
+    }
+    return $len >= MIN_BODY_CHARS;
+};
+
+/** Ensure slug uniqueness by suffixing -2, -3, ... */
+$uniqueSlug = function(string $slug) use ($postsDir): string {
+    $base = $slug !== '' ? $slug : 'post';
+    $s = $base;
+    $i = 2;
+    while (is_file($postsDir . '/' . $s . '.json')) {
+        $s = $base . '-' . $i;
+        $i++;
+        if ($i > 5000) { // sanity
+            throw new RuntimeException('Unable to allocate unique slug.');
+        }
+    }
+    return $s;
+};
+
+/** Atomic JSON write. */
+$atomicWrite = function(string $path, string $json): void {
+    $dir = dirname($path);
+    $tmp = tempnam($dir, 'post_');
+    if ($tmp === false) throw new RuntimeException('tempnam failed for ' . $dir);
+    file_put_contents($tmp, $json, LOCK_EX); // lock while writing
+    if (!@rename($tmp, $path)) {
+        @unlink($tmp);
+        throw new RuntimeException('rename() failed writing ' . $path);
+    }
+};
+
+$client = new FeedClient((string)$cfg['feed_base_url'], (string)$cfg['feed_api_key']);
+
+$attempt = 0;
+$lastError = '';
+$post = null;
+
+while ($attempt < MAX_RETRIES) {
+    $attempt++;
+    fwrite(STDERR, "[article-generate] attempt {$attempt}…\n");
+    try {
+        $resp = $client->generateArticle($lang);
+    } catch (\Throwable $e) {
+        $lastError = 'API error: ' . $e->getMessage();
+        fwrite(STDERR, $lastError . "\n");
+        continue;
+    }
+
+    $candidate = $buildPost($resp);
+    if ($isValid($candidate)) {
+        $post = $candidate;
+        break;
+    } else {
+        $bodyLen = $strlen(trim($candidate['body_markdown'] ?: strip_tags($candidate['body'] ?? '')));
+        fwrite(STDERR, "[article-generate] invalid output (body chars={$bodyLen}). Retrying…\n");
+        // small jitter helps when the backend streams from a pool
+        usleep(random_int(150000, 450000));
+    }
 }
-$body_md = trim(implode("\n\n", $paragraphs));
 
-// Simple HTML body from paragraphs (safe)
-$esc = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-$paras_html = array_map(fn($p) => '<p>'.$esc($p).'</p>', $paragraphs);
-$body_html  = implode("\n", $paras_html);
-
-// PMIDs for the “Referenced studies” section
-$pmids = [];
-foreach ($refs as $r) {
-  $pm = (string)($r['pmid'] ?? '');
-  if ($pm !== '') $pmids[] = $pm;
+if (!$post) {
+    fwrite(STDERR, "[article-generate] failed after ".MAX_RETRIES." attempts. Aborting.\n");
+    exit(1);
 }
 
-$post = [
-  'title'         => $title,
-  'slug'          => $slug,
-  'summary'       => $summary,
-  'tags'          => $tags,
-  'published_at'  => date('Y-m-d'),
-  'body_markdown' => $body_md,
-  'body'          => $body_html,
-  'faqs'          => $faqs,
-  'references'    => $refs,
-  'pmids'         => $pmids,
-];
+// Finalize slug (ensure unique), then write post JSON atomically
+$post['slug'] = $uniqueSlug(Util::slugify($post['slug'] ?: $post['title']));
+$json = json_encode($post, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 
-// Write full post
-$dir = realpath(__DIR__.'/..').'/data/posts';
-@mkdir($dir, 0775, true);
-file_put_contents($dir.'/'.$slug.'.json', json_encode($post, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
+$path = $postsDir . '/' . $post['slug'] . '.json';
+$atomicWrite($path, $json);
 
-// Update index
-$idxFile = realpath(__DIR__.'/..').'/data/posts.json';
+// Update posts index AFTER the post is safely persisted
 $index = ['posts' => []];
-if (is_file($idxFile)) {
-  $index = json_decode((string)file_get_contents($idxFile), true) ?: ['posts'=>[]];
+if (is_file($indexFile)) {
+    $parsed = json_decode((string)file_get_contents($indexFile), true);
+    if (is_array($parsed)) $index = $parsed;
 }
-$index['posts'] = array_values(array_filter($index['posts'], fn($p) => ($p['slug'] ?? '') !== $slug));
+$index['posts'] = array_values(array_filter(
+    $index['posts'],
+    fn($p) => ($p['slug'] ?? '') !== $post['slug']
+));
 array_unshift($index['posts'], [
-  'title'        => $title,
-  'slug'         => $slug,
-  'summary'      => $summary,
-  'tags'         => $tags,
-  'published_at' => $post['published_at'],
+    'title'        => $post['title'],
+    'slug'         => $post['slug'],
+    'summary'      => $post['summary'],
+    'tags'         => $post['tags'],
+    'published_at' => $post['published_at'],
 ]);
-file_put_contents($idxFile, json_encode($index, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
 
-printf("Saved post: %s (%s)\n", $title, $slug);
+$atomicWrite($indexFile, json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+
+printf("Saved post: %s (%s)\n", $post['title'], $post['slug']);
