@@ -9,60 +9,71 @@ use App\Util;
 require __DIR__ . '/../public/bootstrap.php';
 
 $cfg = Util::loadConfig();
-if (($cfg['feed_api_key'] ?? '') === '') {
-  fwrite(STDERR, "FEED_API_KEY is empty; set it in .env or settings.php\n");
-  exit(1);
-}
-
 $lang = $cfg['lang'] ?? 'en';
-foreach ($argv as $a) {
-  if (str_starts_with($a, '--lang=')) $lang = substr($a, 7);
+
+$client = new App\FeedClient($cfg['feed_base_url'], $cfg['feed_api_key']);
+$resp   = $client->generateArticle($lang);
+
+// Pull top-level fields
+$title   = (string)($resp['title'] ?? $resp['article']['title'] ?? 'Untitled');
+$slug    = (string)($resp['slug']  ?? Util::slugify($title));
+$summary = (string)($resp['summary'] ?? '');
+$tags    = array_values(array_filter((array)($resp['tags'] ?? [])));
+$refs    = (array)($resp['references'] ?? []);
+$faqs    = (array)($resp['article']['faqs'] ?? $resp['faqs'] ?? []);
+
+// Rebuild body_markdown from article.content[].paragraph
+$paragraphs = [];
+foreach ((array)($resp['article']['content'] ?? []) as $block) {
+  $p = (string)($block['paragraph'] ?? '');
+  if ($p !== '') $paragraphs[] = $p;
 }
+$body_md = trim(implode("\n\n", $paragraphs));
 
-$client   = new FeedClient($cfg['feed_base_url'], $cfg['feed_api_key']);
-$envelope = $client->generateArticle($lang);
+// Simple HTML body from paragraphs (safe)
+$esc = static fn(string $s): string => htmlspecialchars($s, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+$paras_html = array_map(fn($p) => '<p>'.$esc($p).'</p>', $paragraphs);
+$body_html  = implode("\n", $paras_html);
 
-// Normalize expected structure
-$article = $envelope['article'] ?? $envelope;
-$title   = (string)($article['title'] ?? 'Untitled');
-
-// prefer slugs coming from API if provided
-$slug    = (string)($envelope['slug'] ?? ($article['slug'] ?? Util::slugify($title)));
-$summary = (string)($envelope['summary'] ?? ($article['summary'] ?? ''));
-$tags    = $envelope['tags'] ?? ($article['tags'] ?? []);
-$refs    = $envelope['references'] ?? ($article['references'] ?? []);
-$body    = $envelope['body_markdown'] ?? ($article['body_markdown'] ?? '');
-
-$idx  = Util::loadIndex();
-$slug = Util::uniqueSlug($slug, $idx);
-
+// PMIDs for the “Referenced studies” section
 $pmids = [];
 foreach ($refs as $r) {
-  if (!empty($r['pmid'])) $pmids[] = (string)$r['pmid'];
+  $pm = (string)($r['pmid'] ?? '');
+  if ($pm !== '') $pmids[] = $pm;
 }
 
-// Persist full post
 $post = [
   'title'         => $title,
   'slug'          => $slug,
   'summary'       => $summary,
   'tags'          => $tags,
-  'published_at'  => Util::nowIso(),
-  'body_markdown' => $body,
+  'published_at'  => date('Y-m-d'),
+  'body_markdown' => $body_md,
+  'body'          => $body_html,
+  'faqs'          => $faqs,
   'references'    => $refs,
   'pmids'         => $pmids,
 ];
-Util::savePost($slug, $post);
+
+// Write full post
+$dir = realpath(__DIR__.'/..').'/data/posts';
+@mkdir($dir, 0775, true);
+file_put_contents($dir.'/'.$slug.'.json', json_encode($post, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
 
 // Update index
-$idx['posts'] = $idx['posts'] ?? [];
-array_unshift($idx['posts'], [
+$idxFile = realpath(__DIR__.'/..').'/data/posts.json';
+$index = ['posts' => []];
+if (is_file($idxFile)) {
+  $index = json_decode((string)file_get_contents($idxFile), true) ?: ['posts'=>[]];
+}
+$index['posts'] = array_values(array_filter($index['posts'], fn($p) => ($p['slug'] ?? '') !== $slug));
+array_unshift($index['posts'], [
   'title'        => $title,
   'slug'         => $slug,
   'summary'      => $summary,
   'tags'         => $tags,
   'published_at' => $post['published_at'],
 ]);
-Util::saveIndex($idx);
+file_put_contents($idxFile, json_encode($index, JSON_PRETTY_PRINT|JSON_UNESCAPED_UNICODE));
 
 printf("Saved post: %s (%s)\n", $title, $slug);
