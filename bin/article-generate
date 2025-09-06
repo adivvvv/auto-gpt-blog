@@ -7,6 +7,18 @@ use App\Util;
 
 require __DIR__ . '/../public/bootstrap.php';
 
+// --- perms config ---
+umask(0002); // group-writable by default
+$WEB_GROUP = getenv('WEB_GROUP') ?: 'www-data';
+$ensurePerms = function(string $path, bool $isDir=false, bool $isPostsJson=false) use ($WEB_GROUP): void {
+    @chgrp($path, $WEB_GROUP);
+    if ($isDir) {
+        @chmod($path, 02775); // setgid dir; g+rwX
+    } else {
+        @chmod($path, $isPostsJson ? 0775 : 0664);
+    }
+};
+
 const MIN_BODY_CHARS = 200;
 const MAX_RETRIES     = 5;
 
@@ -15,7 +27,10 @@ $lang  = (string)($cfg['lang'] ?? 'en');
 $base  = realpath(__DIR__ . '/..') ?: dirname(__DIR__);
 $postsDir = $base . '/data/posts';
 $indexFile = $base . '/data/posts.json';
-@mkdir($postsDir, 0775, true);
+@mkdir($postsDir, 02775, true);
+$ensurePerms(dirname($postsDir), true);
+$ensurePerms($postsDir, true);
+$ensurePerms(dirname($indexFile), true);
 
 /** Character length (Unicode aware if mbstring present). */
 $strlen = function(string $s): int {
@@ -159,6 +174,7 @@ $json = json_encode($post, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
 
 $path = $postsDir . '/' . $post['slug'] . '.json';
 $atomicWrite($path, $json);
+$ensurePerms($path, false, true); // post file -> 0775
 
 // Update posts index AFTER the post is safely persisted
 $index = ['posts' => []];
@@ -179,5 +195,6 @@ array_unshift($index['posts'], [
 ]);
 
 $atomicWrite($indexFile, json_encode($index, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+$ensurePerms($indexFile, false, true); // posts.json -> 0775
 
 printf("Saved post: %s (%s)\n", $post['title'], $post['slug']);

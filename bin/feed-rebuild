@@ -20,8 +20,22 @@ require_once $root . '/src/Services/FeedBuilder.php';
 $builder = new \App\Services\FeedBuilder($config);
 $out = $builder->buildAll();
 
+// --- perms config ---
+umask(0002);
+$WEB_GROUP = getenv('WEB_GROUP') ?: 'www-data';
+$ensurePerms = function(string $path, bool $isDir=false) use ($WEB_GROUP): void {
+    @chgrp($path, $WEB_GROUP);
+    if ($isDir) { @chmod($path, 02775); } else { @chmod($path, 0664); }
+};
+
+// Ensure dirs/files are group-writable and inherit group
+$ensurePerms(dirname($out['rss']),  true);
+$ensurePerms(dirname($out['atom']), true);
+$ensurePerms($out['rss'],  false);
+$ensurePerms($out['atom'], false);
+
 echo "Feeds written:\n - {$out['rss']}\n - {$out['atom']}\nItems: {$out['count']}\n";
 
 // Tip: add these <link> tags in your templates for autodiscovery:
-// <link rel=\"alternate\" type=\"application/rss+xml\"  href=\"/rss.xml\"  title=\"RSS\">
-// <link rel=\"alternate\" type=\"application/atom+xml\" href=\"/atom.xml\" title=\"Atom\">\n";
+// <link rel="alternate" type="application/rss+xml"  href="/rss.xml"  title="RSS">
+// <link rel="alternate" type="application/atom+xml" href="/atom.xml" title="Atom">

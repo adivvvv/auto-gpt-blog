@@ -72,18 +72,37 @@ $name   = (string)($bundle['name'] ?? 'Unnamed Theme');
 $seedR  = (string)($bundle['seed'] ?? ($data['plan']['seed'] ?? 'n/a'));
 
 $root = realpath(__DIR__ . '/..') ?: dirname(__DIR__);
+
+// --- perms config ---
+umask(0002);
+$WEB_GROUP = getenv('WEB_GROUP') ?: 'www-data';
+$ensurePerms = function(string $path, bool $isDir=false) use ($WEB_GROUP): void {
+    @chgrp($path, $WEB_GROUP);
+    if ($isDir) {
+        @chmod($path, 02775);
+    } else {
+        // Special-case: data/posts.json and data/posts/*.json => 0775
+        $isPostsJson = (bool)preg_match('~/(data)/(posts(?:\.json|/.*\.json))$~', str_replace('\\','/',$path));
+        @chmod($path, $isPostsJson ? 0775 : 0664);
+    }
+};
+
 $written = 0;
 foreach ($bundle['files'] as $f) {
     $path = $root . $f['path'];
     $dir  = dirname($path);
-    if (!is_dir($dir) && !mkdir($dir, 0775, true) && !is_dir($dir)) {
+    if (!is_dir($dir) && !mkdir($dir, 02775, true) && !is_dir($dir)) {
         fwrite(STDERR, "Cannot create dir: $dir\n");
         exit(5);
     }
+    $ensurePerms($dir, true);
+
     if (file_put_contents($path, (string)$f['content']) === false) {
         fwrite(STDERR, "Cannot write file: $path\n");
         exit(6);
     }
+    $ensurePerms($path, false);
+
     $written++;
 }
 

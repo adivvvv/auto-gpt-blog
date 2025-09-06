@@ -2,6 +2,9 @@
 // config/settings.php
 // --- Site-level knobs (override anything per deployment) ---
 return [
+  // Data directory (writable by web server)
+  'data_dir' => dirname(__DIR__) . '/data',
+
   // Site chrome
   'site_name' => 'My Research Blog',
   // Uses BASE_URL from .env installed by autoinstall; no trailing slash
