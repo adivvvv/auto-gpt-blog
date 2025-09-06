@@ -1,0 +1,27 @@
+#!/usr/bin/env php
+<?php declare(strict_types=1);
+// bin/feed-rebuild
+// Standalone: no Composer/autoload needed.
+
+$root = realpath(__DIR__ . '/..') ?: dirname(__DIR__);
+
+// Load settings (optional)
+$config = [];
+$settings = $root . '/config/settings.php';
+if (is_file($settings)) {
+    $cfg = require $settings;
+    if (is_array($cfg)) $config = $cfg;
+}
+
+// Load FeedBuilder class directly
+require_once $root . '/src/Services/FeedBuilder.php';
+
+// Build feeds
+$builder = new \App\Services\FeedBuilder($config);
+$out = $builder->buildAll();
+
+echo "Feeds written:\n - {$out['rss']}\n - {$out['atom']}\nItems: {$out['count']}\n";
+
+// Tip: add these <link> tags in your templates for autodiscovery:
+// <link rel=\"alternate\" type=\"application/rss+xml\"  href=\"/rss.xml\"  title=\"RSS\">
+// <link rel=\"alternate\" type=\"application/atom+xml\" href=\"/atom.xml\" title=\"Atom\">\n";

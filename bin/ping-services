@@ -1,0 +1,65 @@
+#!/usr/bin/env php
+<?php declare(strict_types=1);
+// bin/ping-services
+// Minimal XML-RPC pinger (Ping-O-Matic). No Composer; no autoload.
+
+function env_read(string $path): array {
+    if (is_file($path)) {
+        $arr = parse_ini_file($path, false, INI_SCANNER_RAW);
+        return is_array($arr) ? $arr : [];
+    }
+    return [];
+}
+
+$root = realpath(__DIR__ . '/..') ?: dirname(__DIR__);
+
+// Load settings + .env for names/URLs
+$config = [];
+$settings = $root . '/config/settings.php';
+if (is_file($settings)) {
+    $cfg = require $settings;
+    if (is_array($cfg)) $config = $cfg;
+}
+$env = env_read($root.'/.env');
+
+$site = (string)($config['site_name'] ?? ($env['SITE_NAME'] ?? 'Site'));
+$home = rtrim((string)($config['base_url'] ?? ($env['BASE_URL'] ?? ($env['APP_URL'] ?? ($env['SITE_URL'] ?? '')))), '/');
+if ($home === '') $home = '/';
+$rss  = $home . '/rss.xml';
+
+// Build XML-RPC envelopes
+function xmlrpc_envelope(string $method, array $params): string {
+    $paramsXml = '';
+    foreach ($params as $p) {
+        $v = htmlspecialchars((string)$p, ENT_QUOTES | ENT_XML1, 'UTF-8');
+        $paramsXml .= "<param><value><string>{$v}</string></value></param>";
+    }
+    return "<?xml version=\"1.0\"?>"
+         . "<methodCall><methodName>{$method}</methodName><params>{$paramsXml}</params></methodCall>";
+}
+
+function post_xml(string $url, string $xml): bool {
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER     => ['Content-Type: text/xml'],
+        CURLOPT_POSTFIELDS     => $xml,
+        CURLOPT_TIMEOUT        => 12,
+        CURLOPT_CONNECTTIMEOUT => 6,
+    ]);
+    curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    return $code === 200;
+}
+
+// Try extendedPing first, fall back to basic ping
+$endpoint = 'http://rpc.pingomatic.com/RPC2';
+$ok = post_xml($endpoint, xmlrpc_envelope('weblogUpdates.extendedPing', [$site, $home, $rss]));
+if (!$ok) {
+    $ok = post_xml($endpoint, xmlrpc_envelope('weblogUpdates.ping', [$site, $home]));
+}
+
+echo $ok ? "Ping-O-Matic: OK\n" : "Ping-O-Matic: FAILED\n";
+exit($ok ? 0 : 1);
