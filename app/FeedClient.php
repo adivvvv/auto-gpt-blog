@@ -71,8 +71,8 @@ final class FeedClient
         $payload = [
             'lang' => $lang,
             'keywords' => ['camel milk'],
-            'paragraphs' => 6,
-            'faqCount' => 5,
+            'paragraphs' => rand(5,7),
+            'faqCount' => rand(4,6),
             'minSentencesPerParagraph' => 4,
             'styleFlags' => ['human-like','evidence-based'],
         ];
