@@ -1,7 +1,5 @@
 #!/usr/bin/env php
 <?php declare(strict_types=1);
-// bin/template-install
-// Fetch and install a unique template from the feed service.
 
 use App\FeedClient;
 use App\Util;
@@ -14,16 +12,21 @@ if (($cfg['feed_api_key'] ?? '') === '') {
   exit(1);
 }
 
-// Defaults from settings.php (overridable by flags)
+// Defaults (can be overridden)
 $lang  = $cfg['template']['lang']       ?? ($cfg['lang'] ?? 'en');
-$seed  = $cfg['template']['seed']       ?? 'default-seed-01';
+$seed  = $cfg['template']['seed']       ?? '';   // ← empty means “randomize”
 $flags = $cfg['template']['styleFlags'] ?? ['clean','airy','modern'];
 
-// CLI flags
+// CLI overrides
 foreach ($argv as $a) {
   if (str_starts_with($a, '--lang='))  $lang  = substr($a, 7);
   if (str_starts_with($a, '--seed='))  $seed  = substr($a, 7);
   if (str_starts_with($a, '--flags=')) $flags = array_values(array_filter(explode(',', substr($a, 8))));
+}
+
+// Randomize seed if not provided
+if ($seed === '' || $seed === 'default-seed-01') {
+  $seed = 'seed-' . bin2hex(random_bytes(5));
 }
 
 $client = new FeedClient($cfg['feed_base_url'], $cfg['feed_api_key']);

@@ -24,7 +24,7 @@ return [
 
   // Template spinning defaults (CLI flags can override)
   'template' => [
-    'seed'       => 'default-seed-01',
+    //'seed'       => 'default-seed-01',
     'styleFlags' => ['clean','airy','modern'],
     'lang'       => 'en'
   ],
