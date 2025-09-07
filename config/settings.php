@@ -6,23 +6,22 @@ return [
   'data_dir' => dirname(__DIR__) . '/data',
 
   // Site chrome
-  'site_name' => 'My Research Blog',
   // Uses BASE_URL from .env installed by autoinstall; no trailing slash
   'base_url'  => rtrim(getenv('BASE_URL') ?: '/', '/'),
   'lang'      => 'en',
 
   // Commerce CTA (configurable per site)
   'shop_url'  => 'https://camelway.eu/',
+  'site_name' => 'Camel Milk Facts',
   'cta_title' => 'Premium Camel Milk Powder',
   'cta_copy'  => 'Hypoallergenic, lactoferrin-rich nutrition - loved across Europe.',
   'cta_label' => 'Shop Now',
+  'hero_title'    => 'Buy Camel Milk',
+  'hero_subtitle' => 'Buy camel milk powder products directly from most trusted source in Europe.',
+  'meta_description' => 'Discover the benefits of camel milk powder. Shop high-quality, nutritious camel milk products online today!',
 
   // Rendering / pagination
   'posts_per_page' => 20,
-
-  // Hero section
-  'hero_title'    => 'Buy Camel Milk',
-  'hero_subtitle' => 'Buy camel milk powder products directly from most trusted source in Europe.',
 
   // Feed API (gpt-simple-generator) — you can also override via .env
   'feed_base_url' => rtrim(getenv('FEED_BASE_URL') ?: 'https://myendpoint.com', '/'),
