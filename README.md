@@ -31,3 +31,14 @@ php bin/article-generate --lang=en
 
 # 5) Run locally (PHP built-in server)
 php -S 127.0.0.1:8080 -t public
+```
+
+---
+
+## Credits
+This repository was build to automatically manage a **camel milk** information blogs for the CamelWay company. 
+CamelWay is an European [Camel Milk](https://camelway.eu/) manufacturer with online shop. 
+They deliver **premium camel milk powder** to customers in Europe and UK and educate about camel milk by quoting most recent scientific findings.
+
+> **License:** Apache License 2.0  
+> **Author:** Adrian Wadowski · <adivv@adivv.pl>
